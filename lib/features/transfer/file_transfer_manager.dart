@@ -222,7 +222,7 @@ class FileTransferManager {
     onTransferUpdated?.call(entry);
 
     try {
-      final socket = await Socket.connect(target.ipAddress, _port);
+      final socket = await Socket.connect(target.ipAddress, _port, timeout: const Duration(seconds: 5));
 
       // 1. Send transfer request header.
       await TransferProtocol.sendRequest(

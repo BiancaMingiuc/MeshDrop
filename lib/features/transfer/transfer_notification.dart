@@ -28,60 +28,72 @@ class TransferNotification {
   }
 
   Future<void> showProgress(String transferId, String fileName, double progress) async {
-    await initialize();
-    final percent = (progress * 100).toInt();
-    final androidDetails = AndroidNotificationDetails(
-      'meshdrop_transfer',
-      'File Transfers',
-      channelDescription: 'MeshDrop file transfer progress',
-      importance: Importance.low,
-      priority: Priority.low,
-      showProgress: true,
-      maxProgress: 100,
-      progress: percent,
-      onlyAlertOnce: true,
-    );
-    final details = NotificationDetails(android: androidDetails);
-    await _plugin.show(
-      transferId.hashCode,
-      'Sending $fileName',
-      '$percent% complete',
-      details,
-    );
+    try {
+      await initialize();
+      final percent = (progress * 100).toInt();
+      final androidDetails = AndroidNotificationDetails(
+        'meshdrop_transfer',
+        'File Transfers',
+        channelDescription: 'MeshDrop file transfer progress',
+        importance: Importance.low,
+        priority: Priority.low,
+        showProgress: true,
+        maxProgress: 100,
+        progress: percent,
+        onlyAlertOnce: true,
+      );
+      final details = NotificationDetails(android: androidDetails);
+      await _plugin.show(
+        transferId.hashCode,
+        'Sending $fileName',
+        '$percent% complete',
+        details,
+      );
+    } catch (e) {
+      // Ignored on platforms without notification support
+    }
   }
 
   Future<void> showCompleted(String transferId, String fileName) async {
-    await initialize();
-    const androidDetails = AndroidNotificationDetails(
-      'meshdrop_transfer',
-      'File Transfers',
-      channelDescription: 'MeshDrop file transfer progress',
-      importance: Importance.defaultImportance,
-    );
-    const details = NotificationDetails(android: androidDetails);
-    await _plugin.show(
-      transferId.hashCode,
-      'Transfer complete',
-      '$fileName received successfully',
-      details,
-    );
+    try {
+      await initialize();
+      const androidDetails = AndroidNotificationDetails(
+        'meshdrop_transfer',
+        'File Transfers',
+        channelDescription: 'MeshDrop file transfer progress',
+        importance: Importance.defaultImportance,
+      );
+      const details = NotificationDetails(android: androidDetails);
+      await _plugin.show(
+        transferId.hashCode,
+        'Transfer complete',
+        '$fileName received successfully',
+        details,
+      );
+    } catch (e) {
+      // Ignored
+    }
   }
 
   Future<void> showFailed(String transferId, String error) async {
-    await initialize();
-    const androidDetails = AndroidNotificationDetails(
-      'meshdrop_transfer',
-      'File Transfers',
-      channelDescription: 'MeshDrop file transfer progress',
-      importance: Importance.high,
-    );
-    const details = NotificationDetails(android: androidDetails);
-    await _plugin.show(
-      transferId.hashCode,
-      'Transfer failed',
-      error,
-      details,
-    );
+    try {
+      await initialize();
+      const androidDetails = AndroidNotificationDetails(
+        'meshdrop_transfer',
+        'File Transfers',
+        channelDescription: 'MeshDrop file transfer progress',
+        importance: Importance.high,
+      );
+      const details = NotificationDetails(android: androidDetails);
+      await _plugin.show(
+        transferId.hashCode,
+        'Transfer failed',
+        error,
+        details,
+      );
+    } catch (e) {
+      print('Notification failed: $e');
+    }
   }
 
   Future<void> dismiss(String transferId) async {
