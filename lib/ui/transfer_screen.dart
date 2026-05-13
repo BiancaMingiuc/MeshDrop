@@ -1,11 +1,14 @@
 // ui/transfer_screen.dart
 // Shows active and completed transfers with progress bars.
+// Pause, resume, and cancel buttons are wired to FileTransferManager.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../features/transfer/file_transfer_manager.dart';
 import '../features/transfer/models/transfer_entry.dart';
 import '../features/transfer/models/transfer_status.dart';
+import '../state/transfer_manager_provider.dart';
 import '../state/transfer_state.dart';
 
 class TransferScreen extends ConsumerWidget {
@@ -26,11 +29,16 @@ class TransferScreen extends ConsumerWidget {
         children: [
           if (transferState.activeTransfers.isNotEmpty) ...[
             _sectionHeader('Active'),
-            showActiveTransfers(context, ref, transferState.activeTransfers),
+            ...transferState.activeTransfers.map(
+              (t) => _ActiveTransferCard(
+                entry: t,
+                manager: ref.read(transferManagerProvider),
+              ),
+            ),
             const SizedBox(height: 24),
           ],
           _sectionHeader('History'),
-          showTransferHistory(context, transferState.completedTransfers),
+          _buildTransferHistory(transferState.completedTransfers),
         ],
       ),
     );
@@ -49,17 +57,7 @@ class TransferScreen extends ConsumerWidget {
         ),
       );
 
-  Widget showActiveTransfers(
-    BuildContext context,
-    WidgetRef ref,
-    List<TransferEntry> transfers,
-  ) {
-    return Column(
-      children: transfers.map((t) => _ActiveTransferCard(entry: t, ref: ref)).toList(),
-    );
-  }
-
-  Widget showTransferHistory(BuildContext context, List<TransferEntry> transfers) {
+  Widget _buildTransferHistory(List<TransferEntry> transfers) {
     if (transfers.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 12),
@@ -70,25 +68,20 @@ class TransferScreen extends ConsumerWidget {
       children: transfers.map((t) => _HistoryCard(entry: t)).toList(),
     );
   }
-
-  void onPauseTransfer(WidgetRef ref, String transferId) {
-    // TODO: Call FileTransferManager.pauseTransfer(transferId).
-  }
-
-  void onCancelTransfer(WidgetRef ref, String transferId) {
-    // TODO: Call FileTransferManager.cancelTransfer(transferId).
-    ref.read(transferStateProvider.notifier).removeTransfer(transferId);
-  }
 }
+
+// ── Active Transfer Card ─────────────────────────────────────────────────────
 
 class _ActiveTransferCard extends StatelessWidget {
   final TransferEntry entry;
-  final WidgetRef ref;
+  final FileTransferManager manager;
 
-  const _ActiveTransferCard({required this.entry, required this.ref});
+  const _ActiveTransferCard({required this.entry, required this.manager});
 
   @override
   Widget build(BuildContext context) {
+    final isPaused = entry.status == TransferStatus.paused;
+
     return Card(
       color: const Color(0xFF161B22),
       margin: const EdgeInsets.only(bottom: 12),
@@ -117,25 +110,43 @@ class _ActiveTransferCard extends StatelessWidget {
             LinearProgressIndicator(
               value: entry.progress,
               backgroundColor: Colors.white12,
-              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF238636)),
+              valueColor: AlwaysStoppedAnimation<Color>(
+                isPaused ? Colors.amber : const Color(0xFF238636),
+              ),
             ),
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '${(entry.progress * 100).toInt()}%  →  ${entry.targetDevice.name}',
+                  isPaused
+                      ? 'Paused  →  ${entry.targetDevice.name}'
+                      : '${(entry.progress * 100).toInt()}%  →  ${entry.targetDevice.name}',
                   style: const TextStyle(color: Colors.white54, fontSize: 12),
                 ),
                 Row(
                   children: [
+                    // Pause / Resume toggle
                     IconButton(
-                      icon: const Icon(Icons.pause, color: Colors.white70, size: 20),
-                      onPressed: () {/* pause */},
+                      icon: Icon(
+                        isPaused ? Icons.play_arrow : Icons.pause,
+                        color: Colors.white70,
+                        size: 20,
+                      ),
+                      tooltip: isPaused ? 'Resume' : 'Pause',
+                      onPressed: () {
+                        if (isPaused) {
+                          manager.resumeTransfer(entry.transferId);
+                        } else {
+                          manager.pauseTransfer(entry.transferId);
+                        }
+                      },
                     ),
+                    // Cancel
                     IconButton(
                       icon: const Icon(Icons.close, color: Colors.red, size: 20),
-                      onPressed: () {/* cancel */},
+                      tooltip: 'Cancel',
+                      onPressed: () => manager.cancelTransfer(entry.transferId),
                     ),
                   ],
                 ),
@@ -147,6 +158,8 @@ class _ActiveTransferCard extends StatelessWidget {
     );
   }
 }
+
+// ── History Card ─────────────────────────────────────────────────────────────
 
 class _HistoryCard extends StatelessWidget {
   final TransferEntry entry;

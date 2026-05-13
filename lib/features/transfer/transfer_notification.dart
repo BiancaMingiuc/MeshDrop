@@ -3,20 +3,24 @@
 // iOS gets a banner, Android gets a Material notification,
 // Linux gets a libnotify popup.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class TransferNotification {
   final FlutterLocalNotificationsPlugin _plugin;
   bool _initialized = false;
 
-  TransferNotification()
-      : _plugin = FlutterLocalNotificationsPlugin();
+  TransferNotification() : _plugin = FlutterLocalNotificationsPlugin();
 
   Future<void> initialize() async {
     if (_initialized) return;
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const darwinSettings = DarwinInitializationSettings();
-    const linuxSettings = LinuxInitializationSettings(defaultActionName: 'Open');
+    const linuxSettings = LinuxInitializationSettings(
+      defaultActionName: 'Open',
+    );
     const settings = InitializationSettings(
       android: androidSettings,
       iOS: darwinSettings,
@@ -27,7 +31,11 @@ class TransferNotification {
     _initialized = true;
   }
 
-  Future<void> showProgress(String transferId, String fileName, double progress) async {
+  Future<void> showProgress(
+    String transferId,
+    String fileName,
+    double progress,
+  ) async {
     try {
       await initialize();
       final percent = (progress * 100).toInt();
@@ -92,7 +100,7 @@ class TransferNotification {
         details,
       );
     } catch (e) {
-      print('Notification failed: $e');
+      debugPrint('Notification failed: $e');
     }
   }
 

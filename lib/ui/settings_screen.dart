@@ -1,18 +1,21 @@
 // ui/settings_screen.dart
 // User preferences: download directory, chunk size, auto-accept, clear trust.
+// All settings are persisted via AppSettingsNotifier → SharedPreferences.
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-
-
-
+import '../state/app_settings_provider.dart';
+import '../state/device_state.dart';
+import '../state/init_provider.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(appSettingsProvider);
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
@@ -25,23 +28,23 @@ class SettingsScreen extends ConsumerWidget {
           _tile(
             icon: Icons.folder_open,
             title: 'Download Directory',
-            subtitle: 'Where received files are saved',
+            subtitle: settings.downloadDirectory,
             trailing: const Icon(Icons.chevron_right, color: Colors.white38),
-            onTap: () => setDownloadDirectory(context),
+            onTap: () => _setDownloadDirectory(context, ref),
           ),
           _switchTile(
             icon: Icons.download_done,
             title: 'Auto-Accept',
             subtitle: 'Accept incoming transfers without prompting',
-            value: false, // TODO: bind to AppSettings.autoAccept
-            onChanged: (v) => setAutoAccept(v),
+            value: settings.autoAccept,
+            onChanged: (v) => _setAutoAccept(ref, v),
           ),
           _tile(
             icon: Icons.memory,
             title: 'Chunk Size',
-            subtitle: '64 KB (default)',
+            subtitle: _chunkSizeLabel(settings.chunkSizeBytes),
             trailing: const Icon(Icons.chevron_right, color: Colors.white38),
-            onTap: () => setChunkSize(context),
+            onTap: () => _setChunkSize(context, ref),
           ),
           const Divider(color: Colors.white12, height: 32),
           _tile(
@@ -68,7 +71,9 @@ class SettingsScreen extends ConsumerWidget {
       leading: Icon(icon, color: Colors.white54),
       title: Text(title,
           style: TextStyle(color: titleColor ?? Colors.white, fontSize: 15)),
-      subtitle: Text(subtitle, style: const TextStyle(color: Colors.white38)),
+      subtitle: Text(subtitle,
+          style: const TextStyle(color: Colors.white38),
+          overflow: TextOverflow.ellipsis),
       trailing: trailing,
       onTap: onTap,
     );
@@ -93,24 +98,66 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  void setDownloadDirectory(BuildContext context) {
-    // TODO: Open platform file picker for directory selection.
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Directory picker coming soon')),
+  // ── Action Handlers ────────────────────────────────────────────────────────
+
+  Future<void> _setDownloadDirectory(BuildContext context, WidgetRef ref) async {
+    final path = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Choose download directory',
     );
+    if (path == null) return;
+    await ref.read(appSettingsProvider.notifier).update(downloadDirectory: path);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Download directory set to $path'),
+          backgroundColor: const Color(0xFF238636),
+        ),
+      );
+    }
   }
 
-  void setAutoAccept(bool enabled) {
-    // TODO: Persist to AppSettings.
+  Future<void> _setAutoAccept(WidgetRef ref, bool enabled) async {
+    await ref.read(appSettingsProvider.notifier).update(autoAccept: enabled);
   }
 
-  void setChunkSize(BuildContext context) {
-    // TODO: Show dialog with chunk size options.
+  Future<void> _setChunkSize(BuildContext context, WidgetRef ref) async {
+    final options = {
+      '32 KB': 32768,
+      '64 KB (default)': 65536,
+      '128 KB': 131072,
+      '256 KB': 262144,
+    };
+
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Text('Chunk Size', style: TextStyle(color: Colors.white)),
+        children: options.entries
+            .map((e) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(ctx, e.value),
+                  child: Text(e.key, style: const TextStyle(color: Colors.white70)),
+                ))
+            .toList(),
+      ),
+    );
+
+    if (selected != null) {
+      await ref.read(appSettingsProvider.notifier).update(chunkSizeBytes: selected);
+    }
   }
 
-  void clearTrustedDevices(WidgetRef ref) {
-    // TODO: Also delete from SecureStorage.
-    // For now, clear state only.
+  Future<void> _clearTrustedDevices(WidgetRef ref) async {
+    // Clear from SecureStorage.
+    final secureStorage = ref.read(secureStorageProvider);
+    final pairedDevices = ref.read(deviceStateProvider).pairedDevices;
+    for (final device in pairedDevices) {
+      await secureStorage.delete(key: 'trusted_${device.deviceId}');
+    }
+    // Clear from Riverpod state.
+    for (final device in pairedDevices) {
+      ref.read(deviceStateProvider.notifier).removePaired(device.deviceId);
+    }
   }
 
   void _confirmClearTrusted(BuildContext context, WidgetRef ref) {
@@ -131,7 +178,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           TextButton(
             onPressed: () {
-              clearTrustedDevices(ref);
+              _clearTrustedDevices(ref);
               Navigator.pop(ctx);
             },
             child: const Text('Clear', style: TextStyle(color: Colors.red)),
@@ -139,5 +186,10 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  String _chunkSizeLabel(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    return '${bytes ~/ 1024} KB';
   }
 }

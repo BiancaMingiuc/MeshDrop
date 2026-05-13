@@ -5,28 +5,41 @@
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-
-import '../features/encryption/crypto_manager.dart';
 import '../features/transfer/file_transfer_manager.dart';
 import '../features/transfer/transfer_notification.dart';
+import 'app_settings_provider.dart';
+import 'device_state.dart';
 import 'discovery_provider.dart';
+import 'init_provider.dart';
 import 'transfer_state.dart';
 
 final transferManagerProvider = Provider<FileTransferManager>((ref) {
   final discoveryManager = ref.watch(discoveryManagerProvider);
-  final cryptoManager = CryptoManager();
+  final cryptoManager = ref.watch(cryptoManagerProvider);
   final notification = TransferNotification();
+  final settings = ref.watch(appSettingsProvider);
 
   final manager = FileTransferManager(
     discoveryManager: discoveryManager,
     cryptoManager: cryptoManager,
     notification: notification,
     localDeviceName: Platform.localHostname,
+    downloadDirectory: settings.downloadDirectory,
   );
 
   // Wire transfer updates into Riverpod state.
   manager.onTransferUpdated = (entry) {
     ref.read(transferStateProvider.notifier).onTransferUpdated(entry);
+  };
+
+  // Wire trusted device lookup for ECDH key derivation.
+  manager.lookupTrustedDevice = (deviceId) {
+    final paired = ref.read(deviceStateProvider).pairedDevices;
+    try {
+      return paired.firstWhere((d) => d.deviceId == deviceId);
+    } catch (_) {
+      return null;
+    }
   };
 
   // Start the TCP receive server in the background.

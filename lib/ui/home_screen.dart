@@ -11,7 +11,9 @@ import '../features/discovery/models/device.dart';
 import '../features/transfer/transfer_protocol.dart';
 import '../state/app_state.dart';
 import '../state/discovery_provider.dart';
+import '../state/init_provider.dart';
 import '../state/transfer_manager_provider.dart';
+import '../state/trusted_devices_provider.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -32,6 +34,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Trigger one-time initialization (identity keys, trusted device loading).
+    ref.watch(initProvider);
+    ref.watch(loadTrustedDevicesProvider);
+
     // Watching keeps discovery alive while the screen is mounted.
     ref.watch(discoveryManagerProvider);
     // Watching starts the receive server immediately.

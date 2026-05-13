@@ -23,7 +23,7 @@ dependencies:
   cryptography: ^2.7.0
 
   # mDNS/DNS-SD discovery (cross-platform NSD)
-  nsd: ^4.0.1
+  nsd: ^5.0.1
 
   # Native OS transfer progress notifications
   flutter_local_notifications: ^18.0.1

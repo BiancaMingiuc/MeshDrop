@@ -5,9 +5,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../features/pairing/trusted_device.dart';
 import '../features/discovery/models/device.dart';
+import '../features/pairing/pairing_session.dart';
+import '../features/pairing/trusted_device.dart';
 import '../state/device_state.dart';
+import '../state/init_provider.dart';
+import '../state/trusted_devices_provider.dart';
 
 class DeviceListScreen extends ConsumerWidget {
   const DeviceListScreen({super.key});
@@ -26,10 +29,10 @@ class DeviceListScreen extends ConsumerWidget {
         padding: const EdgeInsets.all(16),
         children: [
           _sectionHeader('Nearby'),
-          showDiscoveredDevices(context, ref, deviceState.discoveredDevices),
+          _buildDiscoveredDevices(context, ref, deviceState.discoveredDevices),
           const SizedBox(height: 24),
           _sectionHeader('Trusted'),
-          showTrustedDevices(context, ref, deviceState.pairedDevices),
+          _buildTrustedDevices(context, ref, deviceState.pairedDevices),
         ],
       ),
     );
@@ -48,7 +51,7 @@ class DeviceListScreen extends ConsumerWidget {
         ),
       );
 
-  Widget showDiscoveredDevices(
+  Widget _buildDiscoveredDevices(
     BuildContext context,
     WidgetRef ref,
     List<Device> devices,
@@ -66,7 +69,7 @@ class DeviceListScreen extends ConsumerWidget {
                 title: Text(d.name, style: const TextStyle(color: Colors.white)),
                 subtitle: Text(d.ipAddress, style: const TextStyle(color: Colors.white38)),
                 trailing: TextButton(
-                  onPressed: () => onPairDevice(context, ref, d),
+                  onPressed: () => _onPairDevice(context, ref, d),
                   child: const Text('Pair', style: TextStyle(color: Color(0xFF238636))),
                 ),
               ))
@@ -74,7 +77,7 @@ class DeviceListScreen extends ConsumerWidget {
     );
   }
 
-  Widget showTrustedDevices(
+  Widget _buildTrustedDevices(
     BuildContext context,
     WidgetRef ref,
     List<TrustedDevice> devices,
@@ -96,21 +99,143 @@ class DeviceListScreen extends ConsumerWidget {
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline, color: Colors.red),
-                  onPressed: () => onRemoveTrust(ref, d),
+                  onPressed: () => _onRemoveTrust(ref, d),
                 ),
               ))
           .toList(),
     );
   }
 
-  void onPairDevice(BuildContext context, WidgetRef ref, Device device) {
-    // TODO: Instantiate PairingSession and show confirmation code dialog.
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Pairing with ${device.name}...')),
+  // ── Pairing Flow ──────────────────────────────────────────────────────────
+
+  Future<void> _onPairDevice(
+    BuildContext context,
+    WidgetRef ref,
+    Device device,
+  ) async {
+    final cryptoManager = ref.read(cryptoManagerProvider);
+    final secureStorage = ref.read(secureStorageProvider);
+
+    final session = PairingSession(
+      cryptoManager: cryptoManager,
+      secureStorage: secureStorage,
     );
+
+    // Show a progress indicator while the TCP handshake runs.
+    _showSnackBar(context, 'Connecting to ${device.name}…');
+
+    try {
+      await session.initiate(device);
+      final code = await session.generateConfirmationCode();
+
+      if (!context.mounted) return;
+
+      // Show confirmation code dialog.
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => _PairingConfirmDialog(
+          deviceName: device.name,
+          confirmationCode: code,
+        ),
+      );
+
+      if (confirmed == true) {
+        final deviceManager = ref.read(trustedDeviceManagerProvider);
+        final trusted = await session.completePairing(
+          device,
+          deviceManager: deviceManager,
+        );
+        ref.read(deviceStateProvider.notifier).addPaired(trusted);
+        if (context.mounted) {
+          _showSnackBar(context, 'Paired with ${device.name} ✓');
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        _showSnackBar(context, 'Pairing failed: $e', isError: true);
+      }
+    } finally {
+      session.dispose();
+    }
   }
 
-  void onRemoveTrust(WidgetRef ref, TrustedDevice device) {
+  void _onRemoveTrust(WidgetRef ref, TrustedDevice device) {
     ref.read(deviceStateProvider.notifier).removePaired(device.deviceId);
+  }
+
+  void _showSnackBar(BuildContext context, String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : const Color(0xFF238636),
+      ),
+    );
+  }
+}
+
+// ── Pairing Confirmation Dialog ──────────────────────────────────────────────
+
+class _PairingConfirmDialog extends StatelessWidget {
+  final String deviceName;
+  final String confirmationCode;
+
+  const _PairingConfirmDialog({
+    required this.deviceName,
+    required this.confirmationCode,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF161B22),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(
+        'Pair with $deviceName',
+        style: const TextStyle(color: Colors.white),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Verify that the same code appears on both devices:',
+            style: TextStyle(color: Colors.white54),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0D1117),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF238636), width: 1.5),
+            ),
+            child: Text(
+              confirmationCode,
+              style: const TextStyle(
+                color: Color(0xFF238636),
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 8,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel', style: TextStyle(color: Colors.red)),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF238636),
+          ),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Codes Match', style: TextStyle(color: Colors.white)),
+        ),
+      ],
+    );
   }
 }

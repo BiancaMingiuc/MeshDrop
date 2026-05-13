@@ -1,53 +1,43 @@
 // core/app_initializer.dart
-// Bootstraps the entire app: loads settings, initializes SecureStorage,
-// and kicks off device discovery. Nothing else starts before this finishes.
+// Bootstraps the entire app: initializes SecureStorage, generates identity
+// keys on first launch, and kicks off device discovery.
+// Called via Riverpod providers — settings are loaded separately by
+// AppSettingsNotifier so they're available as a provider dependency.
 
+import 'dart:convert';
 
-import 'package:path_provider/path_provider.dart';
-
-import '../core/app_settings.dart';
+import '../features/encryption/crypto_manager.dart';
 import '../features/pairing/secure_storage/secure_storage.dart';
-import '../features/discovery/device_discovery_manager.dart';
-import '../features/discovery/adapters/discovery_adapter.dart';
-
 
 class AppInitializer {
-  late AppSettings settings;
-  late SecureStorage secureStorage;
-  late DeviceDiscoveryManager discoveryManager;
+  final SecureStorage _secureStorage;
+  final CryptoManager _cryptoManager;
 
-  /// Entry point called from main(). Order matters:
-  /// 1. loadSettings, 2. initSecureStorage, 3. startDiscovery.
-  Future<void> initialize({
-    required SecureStorage storage,
-    required DiscoveryAdapter adapter,
-  }) async {
-    secureStorage = storage;
-    settings = await loadSettings();
-    await initSecureStorage();
-    discoveryManager = DeviceDiscoveryManager(adapter: adapter);
-    await startDiscovery();
-  }
+  AppInitializer({
+    required SecureStorage secureStorage,
+    required CryptoManager cryptoManager,
+  })  : _secureStorage = secureStorage,
+        _cryptoManager = cryptoManager;
 
-  /// Reads persisted user preferences. Falls back to defaults on first run.
-  Future<AppSettings> loadSettings() async {
-    // TODO: Read from shared_preferences or secure storage.
-    final directory = await getApplicationDocumentsDirectory();
-    return AppSettings(downloadDirectory: directory.path);
-  }
+  /// Verifies keystore access and generates the Ed25519 identity key pair
+  /// on first launch. The private key is stored in SecureStorage so it
+  /// persists across restarts; the public key is derived from it on demand.
+  Future<void> ensureIdentityKeys() async {
+    final hasKey =
+        await _secureStorage.containsKey('identity_ed25519_private');
+    if (hasKey) return;
 
-  /// Warms up SecureStorage so cryptographic keys are ready to serve.
-  Future<void> initSecureStorage() async {
-    // TODO: Verify keystore access; generate identity key pair if absent.
-    final hasKey = await secureStorage.containsKey('identity_ed25519_private');
-    if (!hasKey) {
-      // CryptoManager will generate and store keys on first use.
-    }
-  }
+    final keyPair = await _cryptoManager.generateEd25519KeyPair();
+    final privateKey = await keyPair.extractPrivateKeyBytes();
+    await _secureStorage.write(
+      key: 'identity_ed25519_private',
+      value: base64Encode(privateKey),
+    );
 
-  /// Starts advertising this device and browsing for peers on the local network.
-  Future<void> startDiscovery() async {
-    discoveryManager.startAdvertising();
-    discoveryManager.startBrowsing();
+    final publicKey = await keyPair.extractPublicKey();
+    await _secureStorage.write(
+      key: 'identity_ed25519_public',
+      value: base64Encode(publicKey.bytes),
+    );
   }
 }

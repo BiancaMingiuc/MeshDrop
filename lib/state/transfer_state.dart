@@ -1,8 +1,13 @@
 // state/transfer_state.dart
 // Riverpod state for active and completed file transfers.
+// Completed transfers are persisted to SharedPreferences so they
+// survive app restarts.
 
+import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../features/discovery/models/device.dart';
 import '../features/transfer/models/transfer_entry.dart';
 import '../features/transfer/models/transfer_status.dart';
 
@@ -35,7 +40,11 @@ class TransferState {
 }
 
 class TransferStateNotifier extends StateNotifier<TransferState> {
-  TransferStateNotifier() : super(const TransferState());
+  static const _historyKey = 'meshdrop_transfer_history';
+
+  TransferStateNotifier() : super(const TransferState()) {
+    _loadHistory();
+  }
 
   void addTransfer(TransferEntry entry) {
     state = state.copyWith(
@@ -64,11 +73,13 @@ class TransferStateNotifier extends StateNotifier<TransferState> {
         state.activeTransfers.where((e) => e.transferId != transferId).toList();
 
     if (entry.status == TransferStatus.completed) {
+      final updated = [...state.completedTransfers, entry];
       state = state.copyWith(
         activeTransfers: remaining,
-        completedTransfers: [...state.completedTransfers, entry],
+        completedTransfers: updated,
         status: TransferStatus.completed,
       );
+      _persistHistory(updated);
     } else {
       state = state.copyWith(activeTransfers: remaining);
     }
@@ -85,6 +96,68 @@ class TransferStateNotifier extends StateNotifier<TransferState> {
       }
     } else {
       addTransfer(entry);
+    }
+  }
+
+  // ── Persistence ─────────────────────────────────────────────────────────────
+
+  Future<void> _loadHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_historyKey);
+      if (raw == null) return;
+
+      final list = jsonDecode(raw) as List;
+      final entries = list
+          .map((e) => _entryFromJson(e as Map<String, dynamic>))
+          .whereType<TransferEntry>()
+          .toList();
+
+      state = state.copyWith(completedTransfers: entries);
+    } catch (_) {
+      // Corrupted data — start with empty history.
+    }
+  }
+
+  Future<void> _persistHistory(List<TransferEntry> entries) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final json = entries.map((e) => _entryToJson(e)).toList();
+      await prefs.setString(_historyKey, jsonEncode(json));
+    } catch (_) {
+      // Best-effort persistence.
+    }
+  }
+
+  /// Serializes a TransferEntry for SharedPreferences storage.
+  static Map<String, dynamic> _entryToJson(TransferEntry entry) => {
+        'transferId': entry.transferId,
+        'fileName': entry.fileName,
+        'fileSize': entry.fileSize,
+        'status': entry.status.name,
+        'progress': entry.progress,
+        'startedAt': entry.startedAt.toIso8601String(),
+        'completedAt': entry.completedAt?.toIso8601String(),
+        'targetDevice': entry.targetDevice.toJson(),
+      };
+
+  /// Deserializes a TransferEntry from SharedPreferences storage.
+  static TransferEntry? _entryFromJson(Map<String, dynamic> json) {
+    try {
+      return TransferEntry(
+        transferId: json['transferId'] as String,
+        fileName: json['fileName'] as String,
+        fileSize: json['fileSize'] as int,
+        status: TransferStatus.values.byName(json['status'] as String),
+        progress: (json['progress'] as num).toDouble(),
+        startedAt: DateTime.parse(json['startedAt'] as String),
+        completedAt: json['completedAt'] != null
+            ? DateTime.parse(json['completedAt'] as String)
+            : null,
+        targetDevice: Device.fromJson(json['targetDevice'] as Map<String, dynamic>),
+      );
+    } catch (_) {
+      return null;
     }
   }
 }

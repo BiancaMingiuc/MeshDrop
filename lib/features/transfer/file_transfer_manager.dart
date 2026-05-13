@@ -18,6 +18,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -26,11 +27,14 @@ import 'package:uuid/uuid.dart';
 
 import '../discovery/device_discovery_manager.dart';
 import '../discovery/models/device.dart';
+import '../discovery/models/platform_type.dart';
 import '../encryption/crypto_manager.dart';
 import '../encryption/encryption_session.dart';
+import '../pairing/trusted_device.dart';
 import 'models/file_chunk.dart';
 import 'models/transfer_entry.dart';
 import 'models/transfer_status.dart';
+import 'socket_reader.dart';
 import 'transfer_notification.dart';
 import 'transfer_protocol.dart';
 import 'transfer_queue.dart';
@@ -44,6 +48,7 @@ class FileTransferManager {
   final TransferQueue _transferQueue;
   final TransferNotification _notification;
   final String _localDeviceName;
+  final String? _downloadDirectory;
 
   ServerSocket? _serverSocket;
   final Set<String> _paused = {};
@@ -56,15 +61,21 @@ class FileTransferManager {
   /// The callback receives the request and must return true (accept) or false (reject).
   Future<bool> Function(TransferRequest request)? onIncomingRequest;
 
+  /// Looks up a TrustedDevice by its device ID to retrieve its public key
+  /// for ECDH key derivation. Injected by the provider layer.
+  TrustedDevice? Function(String deviceId)? lookupTrustedDevice;
+
   FileTransferManager({
     required DeviceDiscoveryManager discoveryManager,
     required CryptoManager cryptoManager,
     required TransferNotification notification,
     required String localDeviceName,
+    String? downloadDirectory,
   })  : _discoveryManager = discoveryManager,
         _cryptoManager = cryptoManager,
         _notification = notification,
         _localDeviceName = localDeviceName,
+        _downloadDirectory = downloadDirectory,
         _transferQueue = TransferQueue();
 
   // ── Receive Server ────────────────────────────────────────────────────────
@@ -119,7 +130,7 @@ class FileTransferManager {
                   name: request.senderName,
                   ipAddress: socket.remoteAddress.address,
                   port: _port,
-                  platform: null as dynamic,
+                  platform: PlatformType.unknown,
                 ),
               )
               .platform,
@@ -129,8 +140,9 @@ class FileTransferManager {
       _transferQueue.enqueue(entry);
       onTransferUpdated?.call(entry);
 
-      // Temporary shared key (Phase 2 placeholder — replaced by ECDH in Phase 3).
-      final sharedSecret = Uint8List(32);
+      // Derive session key: use ECDH with trusted device key if available,
+      // otherwise fall back to a random ephemeral key.
+      final sharedSecret = await _deriveSessionKey(entry.targetDevice.id);
       final session = await _cryptoManager.createSession(sharedSecret);
 
       final chunks = await _receiveChunks(socket, request.fileSize, transferId, session);
@@ -161,7 +173,7 @@ class FileTransferManager {
     String transferId,
     EncryptionSession session,
   ) async {
-    final reader = _SocketReader(socket);
+    final reader = SocketReader(socket);
     final chunks = <FileChunk>[];
     int received = 0;
     int chunkId = 0;
@@ -242,7 +254,8 @@ class FileTransferManager {
       }
 
       // 3. Chunk, encrypt, send.
-      final sharedSecret = Uint8List(32); // placeholder
+      // Derive session key from paired device's public key if available.
+      final sharedSecret = await _deriveSessionKey(target.id);
       final session = await _cryptoManager.createSession(sharedSecret);
       final chunks = await _chunkFile(file, transferId);
 
@@ -302,6 +315,30 @@ class FileTransferManager {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
+  /// Derives a session key for encryption. If the device is trusted (paired),
+  /// uses its stored public key for real X25519 ECDH derivation. Otherwise
+  /// falls back to a random ephemeral key (requires both sides to use the
+  /// same key exchange in a future protocol extension).
+  Future<Uint8List> _deriveSessionKey(String deviceId) async {
+    final trusted = lookupTrustedDevice?.call(deviceId);
+    if (trusted != null) {
+      // Generate an ephemeral X25519 key pair for this transfer and derive
+      // a shared secret from the trusted device's stored public key.
+      await _cryptoManager.generateX25519KeyPair();
+      return _cryptoManager.deriveSharedSecret(trusted.publicKey);
+    }
+    // Unpaired device — use a random key as a temporary measure.
+    return _generateRandomKey();
+  }
+
+  /// Generates a cryptographically secure random 32-byte key.
+  static Uint8List _generateRandomKey() {
+    final rng = Random.secure();
+    return Uint8List.fromList(
+      List<int>.generate(32, (_) => rng.nextInt(256)),
+    );
+  }
+
   Future<List<FileChunk>> _chunkFile(File file, String transferId) async {
     final bytes = await file.readAsBytes();
     final chunks = <FileChunk>[];
@@ -335,34 +372,25 @@ class FileTransferManager {
   }
 
   /// Returns a destination path that doesn't conflict with existing files.
+  /// Uses the user-configured download directory, falling back to the
+  /// system documents directory if none is set or the path doesn't exist.
   Future<String> _resolveDestPath(String fileName) async {
-    final dir = await getApplicationDocumentsDirectory();
-    String dest = p.join(dir.path, fileName);
+    String dirPath;
+    if (_downloadDirectory != null &&
+        _downloadDirectory.isNotEmpty &&
+        await Directory(_downloadDirectory).exists()) {
+      dirPath = _downloadDirectory;
+    } else {
+      dirPath = (await getApplicationDocumentsDirectory()).path;
+    }
+    String dest = p.join(dirPath, fileName);
     int counter = 1;
     final ext = p.extension(fileName);
     final base = p.basenameWithoutExtension(fileName);
     while (await File(dest).exists()) {
-      dest = p.join(dir.path, '$base ($counter)$ext');
+      dest = p.join(dirPath, '$base ($counter)$ext');
       counter++;
     }
     return dest;
-  }
-}
-
-/// Buffered byte reader over a socket stream.
-class _SocketReader {
-  final List<int> _buffer = [];
-  final StreamIterator<List<int>> _iter;
-
-  _SocketReader(Socket socket) : _iter = StreamIterator(socket);
-
-  Future<List<int>> read(int count) async {
-    while (_buffer.length < count) {
-      if (!await _iter.moveNext()) throw StateError('Socket closed');
-      _buffer.addAll(_iter.current);
-    }
-    final result = _buffer.sublist(0, count);
-    _buffer.removeRange(0, count);
-    return result;
   }
 }

@@ -3,6 +3,9 @@
 // Used on Android natively; also the default fallback for Windows/Linux
 // until platform-specific adapters (AvahiAdapter) are wired in.
 
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:nsd/nsd.dart';
 
 import '../models/device.dart';
@@ -35,11 +38,16 @@ class NsdAdapter extends DiscoveryAdapter {
 
   @override
   Future<void> advertise() async {
-    // TODO: Populate txt attributes with device metadata (id, platform).
+    final txt = <String, Uint8List>{
+      'deviceId': Uint8List.fromList(utf8.encode(_deviceName)),
+      'platform': Uint8List.fromList(utf8.encode(_platformType.name)),
+    };
+
     final service = Service(
       name: serviceName,
       type: serviceType,
       port: _port,
+      txt: txt,
     );
     _registration = await register(service);
   }
@@ -86,13 +94,29 @@ class NsdAdapter extends DiscoveryAdapter {
     final port = service.port;
     if (host == null || port == null) return null;
 
-    // TODO: Parse device id and platform from TXT record attributes.
+    String id = service.name ?? host;
+    PlatformType platform = PlatformType.unknown;
+
+    final txt = service.txt;
+    if (txt != null) {
+      if (txt.containsKey('deviceId') && txt['deviceId'] != null) {
+        id = utf8.decode(txt['deviceId']!);
+      }
+      if (txt.containsKey('platform') && txt['platform'] != null) {
+        final platformStr = utf8.decode(txt['platform']!);
+        platform = PlatformType.values.firstWhere(
+          (e) => e.name == platformStr,
+          orElse: () => PlatformType.unknown,
+        );
+      }
+    }
+
     return Device(
-      id: service.name ?? host,
+      id: id,
       name: service.name ?? host,
       ipAddress: host,
       port: port,
-      platform: _platformType,
+      platform: platform,
     );
   }
 }

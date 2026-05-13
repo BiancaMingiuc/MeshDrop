@@ -1,9 +1,11 @@
 // main.dart
 // MeshDrop app entry point.
+// Bootstraps settings and secure storage before the widget tree mounts.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'state/app_settings_provider.dart';
 import 'ui/home_screen.dart';
 import 'ui/device_list_screen.dart';
 import 'ui/transfer_screen.dart';
@@ -11,6 +13,10 @@ import 'ui/settings_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Load persisted settings before the widget tree needs them.
+  await initAppSettingsProvider();
+
   runApp(
     const ProviderScope(
       child: MeshDropApp(),

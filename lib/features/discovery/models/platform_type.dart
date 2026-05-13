@@ -6,4 +6,5 @@ enum PlatformType {
   android,
   windows,
   linux,
+  unknown,
 }

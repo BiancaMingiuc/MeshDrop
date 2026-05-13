@@ -18,6 +18,8 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
 
+import 'socket_reader.dart';
+
 class TransferProtocol {
   static const int _magic = 0x4D534844; // "MSHD"
 
@@ -50,7 +52,7 @@ class TransferProtocol {
   /// Reads a transfer request header from [socket].
   static Future<TransferRequest?> readRequest(Socket socket) async {
     try {
-      final reader = _SocketReader(socket);
+      final reader = SocketReader(socket);
 
       // Magic
       final magic = _bytesToInt32(await reader.read(4));
@@ -85,7 +87,7 @@ class TransferProtocol {
 
   /// Reads the response byte. Returns true if accepted.
   static Future<bool> readResponse(Socket socket) async {
-    final reader = _SocketReader(socket);
+    final reader = SocketReader(socket);
     final byte = await reader.read(1);
     return byte[0] == 0x01;
   }
@@ -134,23 +136,3 @@ class TransferRequest {
   }
 }
 
-/// Buffered byte reader over a socket stream.
-class _SocketReader {
-  final Stream<Uint8List> _stream;
-  final List<int> _buffer = [];
-  late final StreamIterator<Uint8List> _iter;
-
-  _SocketReader(Socket socket) : _stream = socket.cast<Uint8List>() {
-    _iter = StreamIterator(_stream);
-  }
-
-  Future<Uint8List> read(int count) async {
-    while (_buffer.length < count) {
-      if (!await _iter.moveNext()) throw StateError('Socket closed');
-      _buffer.addAll(_iter.current);
-    }
-    final result = Uint8List.fromList(_buffer.sublist(0, count));
-    _buffer.removeRange(0, count);
-    return result;
-  }
-}
