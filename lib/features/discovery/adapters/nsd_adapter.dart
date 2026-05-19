@@ -62,7 +62,7 @@ class NsdAdapter extends DiscoveryAdapter {
 
   @override
   Future<void> browse() async {
-    _discovery = await startDiscovery(serviceType);
+    _discovery = await startDiscovery(serviceType, ipLookupType: IpLookupType.v4);
     _discovery!.addServiceListener((service, status) async {
       if (status == ServiceStatus.found) {
         // We must explicitly resolve the service to get its IP and port.
@@ -111,10 +111,16 @@ class NsdAdapter extends DiscoveryAdapter {
       }
     }
 
+    // Extract actual IP address if resolved, otherwise fallback to host string.
+    String resolvedIp = host;
+    if (service.addresses != null && service.addresses!.isNotEmpty) {
+      resolvedIp = service.addresses!.first.address;
+    }
+
     return Device(
       id: id,
       name: service.name ?? host,
-      ipAddress: host,
+      ipAddress: resolvedIp,
       port: port,
       platform: platform,
     );

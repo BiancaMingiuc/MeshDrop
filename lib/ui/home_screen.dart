@@ -112,7 +112,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     // 2. Send — FileTransferManager handles chunking, encryption, progress.
     final manager = ref.read(transferManagerProvider);
-    await manager.sendFile(file, device);
+    try {
+      await manager.sendFile(file, device);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed connecting to ${device.ipAddress}:\n$e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   // ── Incoming request dialog ───────────────────────────────────────────────

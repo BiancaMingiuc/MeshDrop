@@ -291,6 +291,7 @@ class FileTransferManager {
       _transferQueue.updateStatus(transferId, TransferStatus.failed);
       onTransferUpdated?.call(_transferQueue.getById(transferId)!);
       await _notification.showFailed(transferId, e.toString());
+      rethrow;
     }
   }
 
