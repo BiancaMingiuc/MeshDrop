@@ -168,11 +168,24 @@ class _HistoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isOk = entry.status == TransferStatus.completed;
+    final bool isOk = entry.status == TransferStatus.completed;
+    final bool isCancelled = entry.status == TransferStatus.cancelled;
+    
+    IconData iconData = Icons.check_circle;
+    Color iconColor = const Color(0xFF238636);
+    
+    if (isCancelled) {
+      iconData = Icons.cancel;
+      iconColor = Colors.orange;
+    } else if (!isOk) {
+      iconData = Icons.error_outline;
+      iconColor = Colors.red;
+    }
+
     return ListTile(
       leading: Icon(
-        isOk ? Icons.check_circle : Icons.error_outline,
-        color: isOk ? const Color(0xFF238636) : Colors.red,
+        iconData,
+        color: iconColor,
       ),
       title: Text(entry.fileName,
           style: const TextStyle(color: Colors.white),
@@ -180,6 +193,14 @@ class _HistoryCard extends StatelessWidget {
       subtitle: Text(
         '${entry.fileSizeLabel}  •  ${entry.targetDevice.name}',
         style: const TextStyle(color: Colors.white38),
+      ),
+      trailing: Text(
+        isOk ? 'Completed' : isCancelled ? 'Cancelled' : 'Failed',
+        style: TextStyle(
+          color: iconColor,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+        ),
       ),
     );
   }

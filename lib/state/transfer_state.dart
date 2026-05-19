@@ -53,13 +53,13 @@ class TransferStateNotifier extends StateNotifier<TransferState> {
     );
   }
 
-  void updateProgress(String transferId, double progress) {
+  void updateEntry(TransferEntry newEntry) {
     final updated = state.activeTransfers.map((e) {
-      return e.transferId == transferId ? e.copyWith(progress: progress) : e;
+      return e.transferId == newEntry.transferId ? newEntry : e;
     }).toList();
     state = state.copyWith(
       activeTransfers: updated,
-      currentProgress: progress,
+      currentProgress: newEntry.progress,
     );
   }
 
@@ -72,12 +72,15 @@ class TransferStateNotifier extends StateNotifier<TransferState> {
     final remaining =
         state.activeTransfers.where((e) => e.transferId != transferId).toList();
 
-    if (entry.status == TransferStatus.completed) {
+    if (entry.status == TransferStatus.completed ||
+        entry.status == TransferStatus.failed ||
+        entry.status == TransferStatus.cancelled) {
+      // Add all finished states to history so user can see failures/cancellations too.
       final updated = [...state.completedTransfers, entry];
       state = state.copyWith(
         activeTransfers: remaining,
         completedTransfers: updated,
-        status: TransferStatus.completed,
+        status: entry.status,
       );
       _persistHistory(updated);
     } else {
@@ -88,7 +91,7 @@ class TransferStateNotifier extends StateNotifier<TransferState> {
   void onTransferUpdated(TransferEntry entry) {
     final inActive = state.activeTransfers.any((e) => e.transferId == entry.transferId);
     if (inActive) {
-      updateProgress(entry.transferId, entry.progress);
+      updateEntry(entry);
       if (entry.status == TransferStatus.completed ||
           entry.status == TransferStatus.failed ||
           entry.status == TransferStatus.cancelled) {
