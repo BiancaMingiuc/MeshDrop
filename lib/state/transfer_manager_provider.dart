@@ -17,15 +17,18 @@ final transferManagerProvider = Provider<FileTransferManager>((ref) {
   final discoveryManager = ref.watch(discoveryManagerProvider);
   final cryptoManager = ref.watch(cryptoManagerProvider);
   final notification = TransferNotification();
-  final settings = ref.watch(appSettingsProvider);
-
   final manager = FileTransferManager(
     discoveryManager: discoveryManager,
     cryptoManager: cryptoManager,
     notification: notification,
     localDeviceName: Platform.localHostname,
-    downloadDirectory: settings.downloadDirectory,
+    downloadDirectory: ref.read(appSettingsProvider).downloadDirectory,
   );
+
+  // Update download directory dynamically without restarting the server.
+  ref.listen(appSettingsProvider, (previous, next) {
+    manager.downloadDirectory = next.downloadDirectory;
+  });
 
   // Wire transfer updates into Riverpod state.
   manager.onTransferUpdated = (entry) {

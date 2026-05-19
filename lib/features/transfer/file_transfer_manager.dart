@@ -48,7 +48,7 @@ class FileTransferManager {
   final TransferQueue _transferQueue;
   final TransferNotification _notification;
   final String _localDeviceName;
-  final String? _downloadDirectory;
+  String? downloadDirectory;
 
   ServerSocket? _serverSocket;
   final Set<String> _paused = {};
@@ -75,7 +75,7 @@ class FileTransferManager {
         _cryptoManager = cryptoManager,
         _notification = notification,
         _localDeviceName = localDeviceName,
-        _downloadDirectory = downloadDirectory,
+        downloadDirectory = downloadDirectory,
         _transferQueue = TransferQueue();
 
   // ── Receive Server ────────────────────────────────────────────────────────
@@ -343,10 +343,10 @@ class FileTransferManager {
   /// system documents directory if none is set or the path doesn't exist.
   Future<String> _resolveDestPath(String fileName) async {
     String dirPath;
-    if (_downloadDirectory != null &&
-        _downloadDirectory.isNotEmpty &&
-        await Directory(_downloadDirectory).exists()) {
-      dirPath = _downloadDirectory;
+    if (downloadDirectory != null &&
+        downloadDirectory!.isNotEmpty &&
+        await Directory(downloadDirectory!).exists()) {
+      dirPath = downloadDirectory!;
     } else {
       dirPath = (await getApplicationDocumentsDirectory()).path;
     }
