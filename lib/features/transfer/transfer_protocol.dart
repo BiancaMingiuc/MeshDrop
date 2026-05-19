@@ -29,6 +29,7 @@ class TransferProtocol {
     required String senderName,
     required String fileName,
     required int fileSize,
+    required Uint8List sessionKey,
   }) async {
     final senderBytes = utf8.encode(senderName);
     final fileNameBytes = utf8.encode(fileName);
@@ -44,16 +45,18 @@ class TransferProtocol {
     buffer.add(fileNameBytes);
     // File size
     buffer.add(_int64Bytes(fileSize));
+    // Session key (32 bytes)
+    buffer.add(sessionKey);
 
     socket.add(buffer.toBytes());
     await socket.flush();
   }
 
-  /// Reads a transfer request header from [socket].
-  static Future<TransferRequest?> readRequest(Socket socket) async {
+  /// Reads a transfer request header using an existing [reader].
+  /// The caller must create and own the SocketReader so it can be
+  /// reused for subsequent chunk reads without re-subscribing the stream.
+  static Future<TransferRequest?> readRequest(SocketReader reader) async {
     try {
-      final reader = SocketReader(socket);
-
       // Magic
       final magic = _bytesToInt32(await reader.read(4));
       if (magic != _magic) return null;
@@ -69,10 +72,14 @@ class TransferProtocol {
       // File size
       final fileSize = _bytesToInt64(await reader.read(8));
 
+      // Session key (32 bytes)
+      final sessionKey = await reader.read(32);
+
       return TransferRequest(
         senderName: senderName,
         fileName: fileName,
         fileSize: fileSize,
+        sessionKey: sessionKey,
       );
     } catch (_) {
       return null;
@@ -85,9 +92,10 @@ class TransferProtocol {
   /// Sends a rejection response.
   static void sendReject(Socket socket) => socket.add([0x00]);
 
-  /// Reads the response byte. Returns true if accepted.
-  static Future<bool> readResponse(Socket socket) async {
-    final reader = SocketReader(socket);
+  /// Reads the response byte using an existing [reader].
+  /// The caller must create and own the SocketReader so it can be
+  /// reused for subsequent chunk reads without re-subscribing the stream.
+  static Future<bool> readResponse(SocketReader reader) async {
     final byte = await reader.read(1);
     return byte[0] == 0x01;
   }
@@ -119,11 +127,13 @@ class TransferRequest {
   final String senderName;
   final String fileName;
   final int fileSize;
+  final Uint8List sessionKey;
 
   const TransferRequest({
     required this.senderName,
     required this.fileName,
     required this.fileSize,
+    required this.sessionKey,
   });
 
   String get fileSizeLabel {

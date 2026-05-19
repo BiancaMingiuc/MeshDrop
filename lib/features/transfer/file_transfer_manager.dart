@@ -91,9 +91,13 @@ class FileTransferManager {
   }
 
   Future<void> _handleIncomingConnection(Socket socket) async {
+    // Create the SocketReader ONCE. It subscribes to the socket stream exactly
+    // one time — passing it to readRequest and then to _receiveChunks prevents
+    // the fatal "Stream has already been listened to" StateError.
+    final reader = SocketReader(socket);
     try {
       // 1. Read the transfer request header.
-      final request = await TransferProtocol.readRequest(socket);
+      final request = await TransferProtocol.readRequest(reader);
       if (request == null) {
         socket.destroy();
         return;
@@ -110,7 +114,7 @@ class FileTransferManager {
       TransferProtocol.sendAccept(socket);
       await socket.flush();
 
-      // 3. Receive all chunks.
+      // 3. Receive all chunks, streaming directly to disk.
       final transferId = _uuid.v4();
       final entry = TransferEntry(
         transferId: transferId,
@@ -140,16 +144,17 @@ class FileTransferManager {
       _transferQueue.enqueue(entry);
       onTransferUpdated?.call(entry);
 
-      // Derive session key: use ECDH with trusted device key if available,
-      // otherwise fall back to a random ephemeral key.
-      final sharedSecret = await _deriveSessionKey(entry.targetDevice.id);
-      final session = await _cryptoManager.createSession(sharedSecret);
+      final session = await _cryptoManager.createSession(request.sessionKey);
 
-      final chunks = await _receiveChunks(socket, request.fileSize, transferId, session);
-
-      // 4. Reassemble and save.
+      // Open the destination file for streaming writes.
       final destPath = await _resolveDestPath(request.fileName);
-      await _reassembleFile(chunks, destPath);
+      final sink = File(destPath).openWrite();
+      try {
+        await _receiveChunks(reader, sink, request.fileSize, transferId, session);
+      } finally {
+        await sink.flush();
+        await sink.close();
+      }
 
       _transferQueue.updateStatus(transferId, TransferStatus.completed);
       final done = entry.copyWith(
@@ -167,16 +172,14 @@ class FileTransferManager {
     }
   }
 
-  Future<List<FileChunk>> _receiveChunks(
-    Socket socket,
+  Future<void> _receiveChunks(
+    SocketReader reader,
+    IOSink sink,
     int totalSize,
     String transferId,
     EncryptionSession session,
   ) async {
-    final reader = SocketReader(socket);
-    final chunks = <FileChunk>[];
     int received = 0;
-    int chunkId = 0;
 
     while (received < totalSize) {
       // Read 4-byte length prefix.
@@ -187,23 +190,10 @@ class FileTransferManager {
       // Read encrypted chunk.
       final encrypted = await reader.read(chunkLen);
 
-      // Decrypt.
+      // Decrypt and write directly to disk — no in-memory accumulation.
       final decrypted = await _cryptoManager.decrypt(Uint8List.fromList(encrypted), session);
+      sink.add(decrypted);
 
-      final isLast = received + decrypted.length >= totalSize;
-      final chunk = FileChunk.create(
-        chunkId: chunkId++,
-        transferId: transferId,
-        data: decrypted,
-        offset: received,
-        isLast: isLast,
-      );
-
-      if (!chunk.validate()) {
-        throw Exception('Chunk $chunkId checksum mismatch — data corrupted');
-      }
-
-      chunks.add(chunk);
       received += decrypted.length;
 
       final progress = received / totalSize;
@@ -212,8 +202,6 @@ class FileTransferManager {
       onTransferUpdated?.call(updated);
       await _notification.showProgress(transferId, updated.fileName, progress);
     }
-
-    return chunks;
   }
 
   // ── Send ──────────────────────────────────────────────────────────────────
@@ -236,16 +224,23 @@ class FileTransferManager {
     try {
       final socket = await Socket.connect(target.ipAddress, _port, timeout: const Duration(seconds: 5));
 
+      // 0. Generate a random session key for this transfer.
+      final sessionKey = _generateRandomKey();
+
       // 1. Send transfer request header.
       await TransferProtocol.sendRequest(
         socket,
         senderName: _localDeviceName,
         fileName: fileName,
         fileSize: fileSize,
+        sessionKey: sessionKey,
       );
 
       // 2. Wait for accept / reject.
-      final accepted = await TransferProtocol.readResponse(socket);
+      // Create the reader ONCE here so the same stream subscription is used
+      // for readResponse and any future reads on this socket.
+      final senderReader = SocketReader(socket);
+      final accepted = await TransferProtocol.readResponse(senderReader);
       if (!accepted) {
         socket.destroy();
         _transferQueue.updateStatus(transferId, TransferStatus.cancelled);
@@ -254,9 +249,7 @@ class FileTransferManager {
       }
 
       // 3. Chunk, encrypt, send.
-      // Derive session key from paired device's public key if available.
-      final sharedSecret = await _deriveSessionKey(target.id);
-      final session = await _cryptoManager.createSession(sharedSecret);
+      final session = await _cryptoManager.createSession(sessionKey);
       final chunks = await _chunkFile(file, transferId);
 
       for (int i = 0; i < chunks.length; i++) {
@@ -315,22 +308,6 @@ class FileTransferManager {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  /// Derives a session key for encryption. If the device is trusted (paired),
-  /// uses its stored public key for real X25519 ECDH derivation. Otherwise
-  /// falls back to a random ephemeral key (requires both sides to use the
-  /// same key exchange in a future protocol extension).
-  Future<Uint8List> _deriveSessionKey(String deviceId) async {
-    final trusted = lookupTrustedDevice?.call(deviceId);
-    if (trusted != null) {
-      // Generate an ephemeral X25519 key pair for this transfer and derive
-      // a shared secret from the trusted device's stored public key.
-      await _cryptoManager.generateX25519KeyPair();
-      return _cryptoManager.deriveSharedSecret(trusted.publicKey);
-    }
-    // Unpaired device — use a random key as a temporary measure.
-    return _generateRandomKey();
-  }
-
   /// Generates a cryptographically secure random 32-byte key.
   static Uint8List _generateRandomKey() {
     final rng = Random.secure();
@@ -359,17 +336,6 @@ class FileTransferManager {
     return chunks;
   }
 
-  Future<File> _reassembleFile(List<FileChunk> chunks, String destPath) async {
-    chunks.sort((a, b) => a.offset.compareTo(b.offset));
-    final file = File(destPath);
-    final sink = file.openWrite();
-    for (final chunk in chunks) {
-      sink.add(chunk.data);
-    }
-    await sink.flush();
-    await sink.close();
-    return file;
-  }
 
   /// Returns a destination path that doesn't conflict with existing files.
   /// Uses the user-configured download directory, falling back to the
