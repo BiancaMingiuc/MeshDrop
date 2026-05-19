@@ -24,7 +24,6 @@ import 'encryption_session.dart';
 
 class CryptoManager {
   SimpleKeyPair? _signingKeyPair;   // Ed25519 — long-term identity
-  SimpleKeyPair? _exchangeKeyPair;  // X25519  — per-pairing
 
   final _ed25519 = Ed25519();
   final _x25519 = X25519();
@@ -39,22 +38,20 @@ class CryptoManager {
   }
 
   Future<SimpleKeyPair> generateX25519KeyPair() async {
-    _exchangeKeyPair = await _x25519.newKeyPair();
-    return _exchangeKeyPair!;
+    return await _x25519.newKeyPair();
   }
 
   // ── Key exchange ─────────────────────────────────────────────────────────────
 
   /// Derives a 32-byte shared secret from our X25519 private key and the
   /// remote device's public key. The secret is never transmitted.
-  Future<Uint8List> deriveSharedSecret(Uint8List remotePublicKeyBytes) async {
-    assert(_exchangeKeyPair != null, 'Call generateX25519KeyPair() first');
+  Future<Uint8List> deriveSharedSecret(SimpleKeyPair ourKeyPair, Uint8List remotePublicKeyBytes) async {
     final remotePublicKey = SimplePublicKey(
       remotePublicKeyBytes,
       type: KeyPairType.x25519,
     );
     final sharedSecretKey = await _x25519.sharedSecretKey(
-      keyPair: _exchangeKeyPair!,
+      keyPair: ourKeyPair,
       remotePublicKey: remotePublicKey,
     );
     return Uint8List.fromList(await sharedSecretKey.extractBytes());

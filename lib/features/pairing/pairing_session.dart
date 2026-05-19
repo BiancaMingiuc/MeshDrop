@@ -119,8 +119,9 @@ class PairingSession {
   /// Derives the shared secret and generates the confirmation code.
   /// Both sides arrive at the same 6-digit code without transmitting it.
   Future<String> generateConfirmationCode() async {
+    assert(_localKeyPair != null, 'Local key pair must be generated first');
     assert(_remotePublicKey != null, 'Key exchange must complete first');
-    _sharedSecret = await _cryptoManager.deriveSharedSecret(_remotePublicKey!);
+    _sharedSecret = await _cryptoManager.deriveSharedSecret(_localKeyPair!, _remotePublicKey!);
     _confirmationCode = _deriveCode(_sharedSecret!);
     return _confirmationCode!;
   }

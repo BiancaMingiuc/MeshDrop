@@ -18,7 +18,6 @@
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -111,7 +110,12 @@ class FileTransferManager {
         socket.destroy();
         return;
       }
-      TransferProtocol.sendAccept(socket);
+
+      // Generate our ephemeral key pair and send public key to sender.
+      final ourKeyPair = await _cryptoManager.generateX25519KeyPair();
+      final ourPublicKey = Uint8List.fromList((await ourKeyPair.extractPublicKey()).bytes);
+
+      TransferProtocol.sendAccept(socket, ourPublicKey);
       await socket.flush();
 
       // 3. Receive all chunks, streaming directly to disk.
@@ -144,7 +148,8 @@ class FileTransferManager {
       _transferQueue.enqueue(entry);
       onTransferUpdated?.call(entry);
 
-      final session = await _cryptoManager.createSession(request.sessionKey);
+      final sharedSecret = await _cryptoManager.deriveSharedSecret(ourKeyPair, request.senderPublicKey);
+      final session = await _cryptoManager.createSession(sharedSecret);
 
       // Open the destination file for streaming writes.
       final destPath = await _resolveDestPath(request.fileName);
@@ -224,8 +229,9 @@ class FileTransferManager {
     try {
       final socket = await Socket.connect(target.ipAddress, _port, timeout: const Duration(seconds: 5));
 
-      // 0. Generate a random session key for this transfer.
-      final sessionKey = _generateRandomKey();
+      // 0. Generate an ephemeral X25519 key pair for this transfer.
+      final ourKeyPair = await _cryptoManager.generateX25519KeyPair();
+      final ourPublicKey = Uint8List.fromList((await ourKeyPair.extractPublicKey()).bytes);
 
       // 1. Send transfer request header.
       await TransferProtocol.sendRequest(
@@ -233,15 +239,15 @@ class FileTransferManager {
         senderName: _localDeviceName,
         fileName: fileName,
         fileSize: fileSize,
-        sessionKey: sessionKey,
+        senderPublicKey: ourPublicKey,
       );
 
       // 2. Wait for accept / reject.
       // Create the reader ONCE here so the same stream subscription is used
       // for readResponse and any future reads on this socket.
       final senderReader = SocketReader(socket);
-      final accepted = await TransferProtocol.readResponse(senderReader);
-      if (!accepted) {
+      final receiverPublicKey = await TransferProtocol.readResponse(senderReader);
+      if (receiverPublicKey == null) {
         socket.destroy();
         _transferQueue.updateStatus(transferId, TransferStatus.cancelled);
         onTransferUpdated?.call(_transferQueue.getById(transferId)!);
@@ -249,7 +255,8 @@ class FileTransferManager {
       }
 
       // 3. Chunk, encrypt, send.
-      final session = await _cryptoManager.createSession(sessionKey);
+      final sharedSecret = await _cryptoManager.deriveSharedSecret(ourKeyPair, receiverPublicKey);
+      final session = await _cryptoManager.createSession(sharedSecret);
       final chunks = await _chunkFile(file, transferId);
 
       for (int i = 0; i < chunks.length; i++) {
@@ -308,14 +315,6 @@ class FileTransferManager {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-
-  /// Generates a cryptographically secure random 32-byte key.
-  static Uint8List _generateRandomKey() {
-    final rng = Random.secure();
-    return Uint8List.fromList(
-      List<int>.generate(32, (_) => rng.nextInt(256)),
-    );
-  }
 
   Future<List<FileChunk>> _chunkFile(File file, String transferId) async {
     final bytes = await file.readAsBytes();

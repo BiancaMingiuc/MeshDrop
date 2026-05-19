@@ -29,8 +29,9 @@ class TransferProtocol {
     required String senderName,
     required String fileName,
     required int fileSize,
-    required Uint8List sessionKey,
+    required Uint8List senderPublicKey,
   }) async {
+    assert(senderPublicKey.length == 32, 'X25519 public key must be 32 bytes');
     final senderBytes = utf8.encode(senderName);
     final fileNameBytes = utf8.encode(fileName);
 
@@ -45,8 +46,8 @@ class TransferProtocol {
     buffer.add(fileNameBytes);
     // File size
     buffer.add(_int64Bytes(fileSize));
-    // Session key (32 bytes)
-    buffer.add(sessionKey);
+    // Sender public key (32 bytes)
+    buffer.add(senderPublicKey);
 
     socket.add(buffer.toBytes());
     await socket.flush();
@@ -72,32 +73,45 @@ class TransferProtocol {
       // File size
       final fileSize = _bytesToInt64(await reader.read(8));
 
-      // Session key (32 bytes)
-      final sessionKey = await reader.read(32);
+      // Sender public key (32 bytes)
+      final senderPublicKey = await reader.read(32);
 
       return TransferRequest(
         senderName: senderName,
         fileName: fileName,
         fileSize: fileSize,
-        sessionKey: sessionKey,
+        senderPublicKey: senderPublicKey,
       );
     } catch (_) {
       return null;
     }
   }
 
-  /// Sends an acceptance response.
-  static void sendAccept(Socket socket) => socket.add([0x01]);
+  /// Sends the Accept response along with the receiver's X25519 public key.
+  static void sendAccept(Socket socket, Uint8List receiverPublicKey) {
+    assert(receiverPublicKey.length == 32, 'X25519 public key must be 32 bytes');
+    final buffer = BytesBuilder();
+    buffer.add([0x01]);
+    buffer.add(receiverPublicKey);
+    socket.add(buffer.toBytes());
+  }
 
   /// Sends a rejection response.
   static void sendReject(Socket socket) => socket.add([0x00]);
 
-  /// Reads the response byte using an existing [reader].
-  /// The caller must create and own the SocketReader so it can be
-  /// reused for subsequent chunk reads without re-subscribing the stream.
-  static Future<bool> readResponse(SocketReader reader) async {
-    final byte = await reader.read(1);
-    return byte[0] == 0x01;
+  /// Reads the receiver's response.
+  /// Returns the receiver's 32-byte public key if accepted, or null if rejected.
+  static Future<Uint8List?> readResponse(SocketReader reader) async {
+    try {
+      final statusBytes = await reader.read(1);
+      if (statusBytes[0] == 0x01) {
+        final keyBytes = await reader.read(32);
+        return Uint8List.fromList(keyBytes);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -127,13 +141,13 @@ class TransferRequest {
   final String senderName;
   final String fileName;
   final int fileSize;
-  final Uint8List sessionKey;
+  final Uint8List senderPublicKey;
 
   const TransferRequest({
     required this.senderName,
     required this.fileName,
     required this.fileSize,
-    required this.sessionKey,
+    required this.senderPublicKey,
   });
 
   String get fileSizeLabel {
